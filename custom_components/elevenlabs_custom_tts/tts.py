@@ -185,6 +185,13 @@ class ElevenLabsTTSProvider(TextToSpeechEntity):
         if voice_profile_name and profile is None:
             _LOGGER.warning("Voice profile '%s' not found in profiles %s, using default options",
                           voice_profile_name, list(voice_profiles.keys()))
+        elif not voice_profile_name and len(voice_profiles) == 1:
+            # A single configured profile is the user's explicit choice: use it
+            # when the pipeline passes no profile name (it never does), rather
+            # than silently falling back to the factory-default voice.
+            voice_profile_name = next(iter(voice_profiles))
+            profile = voice_profiles[voice_profile_name]
+            _LOGGER.info("No voice_profile requested; using sole configured profile '%s'", voice_profile_name)
         
         call_options = dict(options)
         if profile is not None:
@@ -209,6 +216,38 @@ class ElevenLabsTTSProvider(TextToSpeechEntity):
             use_speaker_boost=use_speaker_boost,
             speed=speed,
         )
+
+        if model_id and model_id.startswith("eleven_v4"):
+            # v4 models are served by the Text-to-Dialogue API; the standard
+            # text-to-speech endpoint the SDK uses rejects them.
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            dialogue_body = {
+                "inputs": [{"voice_id": voice_id, "text": message}],
+                "model_id": model_id,
+            }
+            if language:
+                dialogue_body["language_code"] = language
+            session = async_get_clientsession(self.hass)
+            try:
+                async with asyncio.timeout(TTS_TIMEOUT):
+                    async with session.post(
+                        "https://api.elevenlabs.io/v1/text-to-dialogue",
+                        params={"output_format": "mp3_44100_128"},
+                        headers={"xi-api-key": self._config_entry.data.get("api_key", "")},
+                        json=dialogue_body,
+                    ) as resp:
+                        if resp.status != 200:
+                            err = (await resp.text())[:300]
+                            raise HomeAssistantError(
+                                f"ElevenLabs v4 dialogue API error {resp.status}: {err}"
+                            )
+                        audio_bytes = await resp.read()
+            except TimeoutError as err:
+                raise HomeAssistantError("Timed out generating ElevenLabs v4 dialogue audio") from err
+            if not audio_bytes:
+                raise HomeAssistantError("No audio data received from ElevenLabs (v4 dialogue)")
+            return "mp3", audio_bytes
         
         convert_params = {
             "text": message,

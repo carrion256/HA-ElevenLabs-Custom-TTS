@@ -43,6 +43,7 @@ DEFAULT_APPLY_TEXT_NORMALIZATION = "auto"
 # can't be reached. The options flow also accepts any custom model ID typed in.
 FALLBACK_MODELS = [
     "eleven_v3",
+    "eleven_v4_turbo",
     "eleven_multilingual_v2",
     "eleven_flash_v2_5",
     "eleven_flash_v2",
